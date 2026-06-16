@@ -1,0 +1,7 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Subtext Audio mark</title>
+  <desc id="desc">Minimal SA monogram with an audio waveform.</desc>
+  <rect width="160" height="160" rx="28" fill="#0f1720"/>
+  <path d="M35 90c13 0 13-42 26-42s13 64 26 64 13-48 26-48 13 26 26 26" fill="none" stroke="#19b8d6" stroke-width="10" stroke-linecap="round"/>
+  <text x="35" y="132" fill="#ffffff" font-family="Arial, sans-serif" font-size="30" font-weight="700">SA</text>
+</svg>
