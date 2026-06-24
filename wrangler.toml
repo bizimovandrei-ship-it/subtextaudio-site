@@ -8,12 +8,8 @@ CONTACT_FROM = "Subtext Audio <onboarding@resend.dev>"
 RATE_LIMIT_MAX = "5"
 RATE_LIMIT_WINDOW = "600"
 
-# Create a KV namespace in Cloudflare Dashboard, then paste IDs below.
-# Dashboard: Workers & Pages -> KV -> Create namespace -> "CONTACT_RATE_LIMIT"
-[[kv_namespaces]]
-binding = "RATE_LIMIT"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
+# KV binding (RATE_LIMIT) must be configured in the Cloudflare Pages dashboard.
+# Do not add placeholder IDs here — invalid kv_namespaces entries break deployment.
 
 # Set secrets via CLI or Dashboard (never commit them):
 #   wrangler secret put TURNSTILE_SECRET_KEY

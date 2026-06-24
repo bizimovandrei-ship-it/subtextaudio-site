@@ -38,8 +38,7 @@ Set the same values for **Production** and **Preview** environments.
 
 1. Cloudflare Dashboard → **Workers & Pages** → **KV** → **Create**.
 2. Name: `CONTACT_RATE_LIMIT`.
-3. Copy the namespace ID into `wrangler.toml` (`id` and `preview_id`).
-4. In Pages project → **Settings** → **Functions** → **KV namespace bindings**:
+3. In Pages project → **Settings** → **Functions** → **KV namespace bindings**:
    - Variable name: `RATE_LIMIT`
    - KV namespace: `CONTACT_RATE_LIMIT`
 
