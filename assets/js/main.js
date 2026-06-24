@@ -7,14 +7,4 @@
       toggle.setAttribute('aria-expanded', String(open));
     });
   }
-  document.querySelectorAll('form[data-static-form]').forEach((form) => {
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const message = form.querySelector('[data-form-message]');
-      if (message) {
-        message.hidden = false;
-        message.focus?.();
-      }
-    });
-  });
 });
