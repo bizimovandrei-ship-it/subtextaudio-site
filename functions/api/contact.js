@@ -1,5 +1,28 @@
-const GENERIC_ERROR = 'Unable to send your message. Please try again later.';
+const MIN_MESSAGE_LENGTH = 20;
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+const USER_ERRORS = {
+  ru: {
+    messageShort:
+      'Пожалуйста, опишите ваш запрос подробнее. Сообщение должно содержать не менее 20 символов.',
+    consentMissing: 'Пожалуйста, подтвердите согласие, поставив галочку выше.',
+    turnstileStale: 'Проверка безопасности устарела. Обновите страницу и попробуйте ещё раз.',
+    serverError:
+      'Не удалось отправить заявку. Пожалуйста, попробуйте позже или напишите напрямую на subtextaudio@gmail.com.',
+    generic:
+      'Не удалось отправить заявку. Пожалуйста, попробуйте позже или напишите напрямую на subtextaudio@gmail.com.',
+  },
+  en: {
+    messageShort:
+      'Please describe your request in more detail. Your message must be at least 20 characters.',
+    consentMissing: 'Please confirm your consent by checking the box above.',
+    turnstileStale: 'The security check has expired. Please refresh the page and try again.',
+    serverError:
+      'We could not send your request. Please try again later or email subtextaudio@gmail.com directly.',
+    generic:
+      'We could not send your request. Please try again later or email subtextaudio@gmail.com directly.',
+  },
+};
 
 const ALLOWED_SERVICES = new Set([
   'AI Voiceover',
@@ -23,32 +46,39 @@ const JSON_HEADERS = {
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  let lang = 'ru';
 
   try {
     logEnvDiagnostics(env);
 
     const formData = await request.formData();
+    lang = resolveLang(formData);
+    const errors = userErrors(lang);
 
     if (String(formData.get('website') || '').trim() !== '') {
       console.warn('[contact] honeypot triggered');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.generic, 400);
     }
 
     const clientIp = getClientIp(request);
     if (!(await checkRateLimit(env, clientIp))) {
       console.warn('[contact] rate limit exceeded', { clientIp });
-      return jsonError(GENERIC_ERROR, 429);
+      return jsonError(errors.generic, 429);
     }
 
     const turnstileToken = String(formData.get('cf-turnstile-response') || '').trim();
     if (!turnstileToken) {
       console.warn('[contact] Turnstile token missing');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.turnstileStale, 400);
     }
 
-    const turnstileOk = await verifyTurnstile(turnstileToken, clientIp, env.TURNSTILE_SECRET_KEY);
-    if (!turnstileOk) {
-      return jsonError(GENERIC_ERROR, 400);
+    const turnstileResult = await verifyTurnstile(
+      turnstileToken,
+      clientIp,
+      env.TURNSTILE_SECRET_KEY,
+    );
+    if (!turnstileResult.ok) {
+      return jsonError(errors.turnstileStale, 400);
     }
 
     const name = sanitizeText(formData.get('name'), 100);
@@ -59,27 +89,27 @@ export async function onRequestPost(context) {
 
     if (name.length < 2) {
       console.warn('[contact] validation failed: name too short');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.generic, 400);
     }
 
     if (!isValidEmail(email)) {
       console.warn('[contact] validation failed: invalid email');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.generic, 400);
     }
 
     if (!service || !ALLOWED_SERVICES.has(service)) {
       console.warn('[contact] validation failed: invalid service', { service });
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.generic, 400);
     }
 
-    if (message.replace(/\s+/g, '').length < 10) {
+    if (isMessageTooShort(message)) {
       console.warn('[contact] validation failed: message too short');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.messageShort, 400);
     }
 
     if (!consent) {
       console.warn('[contact] validation failed: consent missing');
-      return jsonError(GENERIC_ERROR, 400);
+      return jsonError(errors.consentMissing, 400);
     }
 
     const payload = {
@@ -100,7 +130,7 @@ export async function onRequestPost(context) {
     });
   } catch (error) {
     logUnhandledError(error);
-    return jsonError(GENERIC_ERROR, 500);
+    return jsonError(userErrors(lang).serverError, 500);
   }
 }
 
@@ -121,6 +151,19 @@ function jsonError(message, status) {
     status,
     headers: JSON_HEADERS,
   });
+}
+
+function resolveLang(formData) {
+  const lang = String(formData.get('form_lang') || '').trim().toLowerCase();
+  return lang === 'en' ? 'en' : 'ru';
+}
+
+function userErrors(lang) {
+  return USER_ERRORS[lang] || USER_ERRORS.ru;
+}
+
+function isMessageTooShort(message) {
+  return String(message || '').trim().length < MIN_MESSAGE_LENGTH;
 }
 
 function envPresent(env, key) {
@@ -214,7 +257,7 @@ function isValidEmail(email) {
 async function verifyTurnstile(token, ip, secret) {
   if (!secret) {
     console.error('[contact] Turnstile: TURNSTILE_SECRET_KEY is not configured');
-    return false;
+    return { ok: false, errorCodes: ['missing-secret'] };
   }
 
   const body = new URLSearchParams({
@@ -237,16 +280,21 @@ async function verifyTurnstile(token, ip, secret) {
       httpStatus: response.status,
       error: error instanceof Error ? error.message : String(error),
     });
-    return false;
+    return { ok: false, errorCodes: ['invalid-json'] };
   }
+
+  const errorCodes = Array.isArray(data?.['error-codes']) ? data['error-codes'] : [];
 
   console.log('[contact] Turnstile verify:', {
     httpStatus: response.status,
     success: data?.success === true,
-    errorCodes: Array.isArray(data?.['error-codes']) ? data['error-codes'] : [],
+    errorCodes,
   });
 
-  return response.ok && data?.success === true;
+  return {
+    ok: response.ok && data?.success === true,
+    errorCodes,
+  };
 }
 
 async function checkRateLimit(env, ip) {
