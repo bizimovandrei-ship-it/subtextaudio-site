@@ -1,4 +1,5 @@
 const GENERIC_ERROR = 'Unable to send your message. Please try again later.';
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
 const ALLOWED_SERVICES = new Set([
   'AI Voiceover',
@@ -24,22 +25,29 @@ export async function onRequestPost(context) {
   const { request, env } = context;
 
   try {
+    logEnvDiagnostics(env);
+
     const formData = await request.formData();
 
     if (String(formData.get('website') || '').trim() !== '') {
+      console.warn('[contact] honeypot triggered');
       return jsonError(GENERIC_ERROR, 400);
     }
 
     const clientIp = getClientIp(request);
     if (!(await checkRateLimit(env, clientIp))) {
+      console.warn('[contact] rate limit exceeded', { clientIp });
       return jsonError(GENERIC_ERROR, 429);
     }
 
     const turnstileToken = String(formData.get('cf-turnstile-response') || '').trim();
-    if (
-      !turnstileToken ||
-      !(await verifyTurnstile(turnstileToken, clientIp, env.TURNSTILE_SECRET_KEY))
-    ) {
+    if (!turnstileToken) {
+      console.warn('[contact] Turnstile token missing');
+      return jsonError(GENERIC_ERROR, 400);
+    }
+
+    const turnstileOk = await verifyTurnstile(turnstileToken, clientIp, env.TURNSTILE_SECRET_KEY);
+    if (!turnstileOk) {
       return jsonError(GENERIC_ERROR, 400);
     }
 
@@ -50,22 +58,27 @@ export async function onRequestPost(context) {
     const consent = formData.get('consent');
 
     if (name.length < 2) {
+      console.warn('[contact] validation failed: name too short');
       return jsonError(GENERIC_ERROR, 400);
     }
 
     if (!isValidEmail(email)) {
+      console.warn('[contact] validation failed: invalid email');
       return jsonError(GENERIC_ERROR, 400);
     }
 
     if (!service || !ALLOWED_SERVICES.has(service)) {
+      console.warn('[contact] validation failed: invalid service', { service });
       return jsonError(GENERIC_ERROR, 400);
     }
 
     if (message.replace(/\s+/g, '').length < 10) {
+      console.warn('[contact] validation failed: message too short');
       return jsonError(GENERIC_ERROR, 400);
     }
 
     if (!consent) {
+      console.warn('[contact] validation failed: consent missing');
       return jsonError(GENERIC_ERROR, 400);
     }
 
@@ -86,7 +99,7 @@ export async function onRequestPost(context) {
       headers: JSON_HEADERS,
     });
   } catch (error) {
-    console.error('Contact form error:', error instanceof Error ? error.message : error);
+    logUnhandledError(error);
     return jsonError(GENERIC_ERROR, 500);
   }
 }
@@ -108,6 +121,59 @@ function jsonError(message, status) {
     status,
     headers: JSON_HEADERS,
   });
+}
+
+function envPresent(env, key) {
+  const value = env[key];
+  return typeof value === 'string' ? value.trim() !== '' : value != null && value !== '';
+}
+
+function extractEmailAddress(value) {
+  const text = String(value || '').trim();
+  const bracketMatch = text.match(/<([^>]+)>/);
+  if (bracketMatch) {
+    return bracketMatch[1].trim();
+  }
+  return text;
+}
+
+function extractEmailDomain(value) {
+  const address = extractEmailAddress(value);
+  const atIndex = address.lastIndexOf('@');
+  return atIndex === -1 ? null : address.slice(atIndex + 1).toLowerCase();
+}
+
+function logEnvDiagnostics(env) {
+  const from = env.CONTACT_FROM;
+  const fromDomain = extractEmailDomain(from);
+
+  console.log('[contact] env diagnostics:', {
+    TURNSTILE_SECRET_KEY: envPresent(env, 'TURNSTILE_SECRET_KEY'),
+    RESEND_API_KEY: envPresent(env, 'RESEND_API_KEY'),
+    CONTACT_FROM: envPresent(env, 'CONTACT_FROM'),
+    CONTACT_TO: envPresent(env, 'CONTACT_TO'),
+    CONTACT_FROM_DOMAIN: fromDomain,
+    RATE_LIMIT_BINDING: !!env.RATE_LIMIT,
+  });
+
+  if (fromDomain === 'resend.dev') {
+    console.warn(
+      '[contact] CONTACT_FROM uses resend.dev. Resend only allows onboarding@resend.dev to send to the Resend account owner email. Use a verified custom domain for production delivery.',
+    );
+  }
+}
+
+function logUnhandledError(error) {
+  if (error instanceof Error) {
+    console.error('[contact] unhandled exception:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+    return;
+  }
+
+  console.error('[contact] unhandled exception:', error);
 }
 
 function getClientIp(request) {
@@ -147,7 +213,7 @@ function isValidEmail(email) {
 
 async function verifyTurnstile(token, ip, secret) {
   if (!secret) {
-    console.error('TURNSTILE_SECRET_KEY is not configured.');
+    console.error('[contact] Turnstile: TURNSTILE_SECRET_KEY is not configured');
     return false;
   }
 
@@ -163,12 +229,24 @@ async function verifyTurnstile(token, ip, secret) {
     body,
   });
 
-  if (!response.ok) {
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    console.error('[contact] Turnstile: failed to parse response JSON', {
+      httpStatus: response.status,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return false;
   }
 
-  const data = await response.json();
-  return data.success === true;
+  console.log('[contact] Turnstile verify:', {
+    httpStatus: response.status,
+    success: data?.success === true,
+    errorCodes: Array.isArray(data?.['error-codes']) ? data['error-codes'] : [],
+  });
+
+  return response.ok && data?.success === true;
 }
 
 async function checkRateLimit(env, ip) {
@@ -222,10 +300,28 @@ function buildEmailBody(payload) {
   ].join('\n');
 }
 
+function resolveContactFrom(env) {
+  const configured = String(env.CONTACT_FROM || '').trim();
+  if (configured) {
+    return configured;
+  }
+
+  return 'Subtext Audio <contact@subtextaudio.com>';
+}
+
+function resolveContactTo(env) {
+  const configured = String(env.CONTACT_TO || '').trim();
+  if (configured) {
+    return configured;
+  }
+
+  return 'subtextaudio@gmail.com';
+}
+
 async function sendContactEmail(env, payload) {
   const apiKey = env.RESEND_API_KEY;
-  const from = env.CONTACT_FROM;
-  const to = env.CONTACT_TO || 'subtextaudio@gmail.com';
+  const from = resolveContactFrom(env);
+  const to = resolveContactTo(env);
 
   if (!apiKey) {
     throw new Error('RESEND_API_KEY is not configured.');
@@ -235,24 +331,70 @@ async function sendContactEmail(env, payload) {
     throw new Error('CONTACT_FROM is not configured.');
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
+  if (!to) {
+    throw new Error('CONTACT_TO is not configured.');
+  }
+
+  const fromDomain = extractEmailDomain(from);
+  if (fromDomain === 'resend.dev') {
+    console.warn(
+      '[contact] Resend sender uses resend.dev domain. Delivery to external recipients such as subtextaudio@gmail.com will be rejected unless the Resend account owner email matches.',
+    );
+  }
+
+  const requestBody = {
+    from,
+    to: [to],
+    reply_to: payload.email,
+    subject: `Subtext Audio — project brief from ${payload.name}`,
+    text: buildEmailBody(payload),
+  };
+
+  console.log('[contact] Resend request:', {
+    endpoint: RESEND_ENDPOINT,
+    authorization: apiKey ? 'Bearer [present]' : 'Bearer [missing]',
+    fromDomain,
+    toPresent: !!to,
+    replyToPresent: !!payload.email,
+  });
+
+  const response = await fetch(RESEND_ENDPOINT, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      reply_to: payload.email,
-      subject: `Subtext Audio — project brief from ${payload.name}`,
-      text: buildEmailBody(payload),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
+  const responseText = await response.text();
+
   if (!response.ok) {
-    const detail = await response.text();
-    console.error('Resend API error:', response.status, detail);
+    console.error('[contact] Resend error:', {
+      status: response.status,
+      body: responseText,
+    });
+
+    if (response.status === 403 && fromDomain === 'resend.dev') {
+      console.error(
+        '[contact] Resend 403 with resend.dev sender: verify subtextaudio.com in Resend and set CONTACT_FROM to an address on that domain.',
+      );
+    }
+
     throw new Error(`Resend API returned ${response.status}`);
   }
+
+  let responseData = null;
+  if (responseText) {
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { raw: responseText };
+    }
+  }
+
+  console.log('[contact] Resend success:', {
+    status: response.status,
+    id: responseData?.id || null,
+  });
 }

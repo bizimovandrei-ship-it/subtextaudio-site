@@ -26,7 +26,7 @@ Configure in **Cloudflare Dashboard** → your Pages project → **Settings** �
 | Name | Example value |
 |------|----------------|
 | `CONTACT_TO` | `subtextaudio@gmail.com` |
-| `CONTACT_FROM` | `Subtext Audio <contact@yourdomain.com>` |
+| `CONTACT_FROM` | `Subtext Audio <contact@subtextaudio.com>` (domain must be verified in Resend) |
 | `RATE_LIMIT_MAX` | `5` |
 | `RATE_LIMIT_WINDOW` | `600` |
 
@@ -74,9 +74,16 @@ wrangler secret put RESEND_API_KEY
 
 ## Resend sender address
 
-`CONTACT_FROM` must use a domain verified in Resend.
+`CONTACT_FROM` must use a domain verified in Resend (for example `contact@subtextaudio.com`).
 
-Until your domain is verified, Resend may only allow sending to the account owner email during testing.
+Do **not** use `onboarding@resend.dev` for production: Resend returns HTTP 403 when sending to addresses other than the Resend account owner.
+
+### Verify subtextaudio.com in Resend
+
+1. Resend Dashboard → **Domains** → **Add Domain** → `subtextaudio.com`
+2. Add the DNS records Resend provides (SPF, DKIM) in Cloudflare DNS
+3. Wait until the domain status is **Verified**
+4. Set `CONTACT_FROM` to `Subtext Audio <contact@subtextaudio.com>` in Cloudflare Pages variables (or keep the value in `wrangler.toml`)
 
 ---
 

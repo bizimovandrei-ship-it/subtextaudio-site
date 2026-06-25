@@ -4,7 +4,7 @@ pages_build_output_dir = "."
 
 [vars]
 CONTACT_TO = "subtextaudio@gmail.com"
-CONTACT_FROM = "Subtext Audio <onboarding@resend.dev>"
+CONTACT_FROM = "Subtext Audio <contact@subtextaudio.com>"
 RATE_LIMIT_MAX = "5"
 RATE_LIMIT_WINDOW = "600"
 
